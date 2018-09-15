@@ -459,17 +459,19 @@ const char HUE_DESCRIPTION_XML[] PROGMEM =
   "</device>"
   "</root>\r\n"
   "\r\n";
-const char HUE_LIGHTS_STATUS_JSON[] PROGMEM =
+const char HUE_LIGHTS_STATUS_BASE_JSON[] PROGMEM =
   "{\"on\":{state},"
-  "\"bri\":{b},"
-  "\"hue\":{h},"
-  "\"sat\":{s},"
-  "\"xy\":[0.5, 0.5],"
-  "\"ct\":{t},"
   "\"alert\":\"none\","
   "\"effect\":\"none\","
-  "\"colormode\":\"{m}\","
-  "\"reachable\":true}";
+  "\"reachable\":true";
+const char HUE_LIGHTS_STATUS_BRI_JSON[] PROGMEM =
+  ",\"bri\":{b}";
+const char HUE_LIGHTS_STATUS_COLOR_JSON[] PROGMEM =
+  ",\"hue\":{h},"
+  "\"sat\":{s},"
+  "\"ct\":{t},"
+  "\"colormode\":\"{m}\"";
+const char HUE_LIGHTS_CLOSE_PARENTHESES_JSON[] PROGMEM = "}"; 
 const char HUE_LIGHTS_STATUS_JSON2[] PROGMEM =
   ",\"type\":\"Extended color light\","
   "\"name\":\"{j1\","
@@ -562,6 +564,22 @@ void HueConfig(String *path)
   WebServer->send(200, FPSTR(HDR_CTYPE_JSON), response);
 }
 
+uint8_t FactorToAlexa(float factor) {
+  uint8_t alexaValue = (uint8_t)(253.0f * factor + 1.5f);
+  if(alexaValue > 254)
+    alexaValue = 254;
+  else if(alexaValue < 2) // < 1% is 0%
+    alexaValue = 0;
+  return alexaValue;
+}
+
+float AlexaToFactor(uint8_t alexaValue) {
+  float factor = alexaValue / 253.0f;
+  if(factor > 1.0f)
+    factor = 1.0f;
+  return factor;
+}
+
 bool g_gotct = false;
 
 void HueLightStatus1(byte device, String *response)
@@ -570,18 +588,37 @@ void HueLightStatus1(byte device, String *response)
   float sat = 0;
   float bri = 0;
   uint16_t ct = 500;
+  bool on = power & (1 << (device-1));
 
   if (light_type) {
     LightGetHsb(&hue, &sat, &bri, g_gotct);
     ct = LightGetColorTemp();
   }
-  *response += FPSTR(HUE_LIGHTS_STATUS_JSON);
-  response->replace("{state}", (power & (1 << (device-1))) ? "true" : "false");
-  response->replace("{h}", String((uint16_t)(65535.0f * hue)));
-  response->replace("{s}", String((uint8_t)(254.0f * sat)));
-  response->replace("{b}", String((uint8_t)(254.0f * bri)));
-  response->replace("{t}", String(ct));
-  response->replace("{m}", g_gotct?"ct":"hs");
+
+  *response += FPSTR(HUE_LIGHTS_STATUS_BASE_JSON);
+  response->replace("{state}", on ? "true" : "false");
+
+  if(light_type > 0) {
+    *response += FPSTR(HUE_LIGHTS_STATUS_BRI_JSON);
+    response->replace("{b}", String(FactorToAlexa(bri)));
+  }
+
+  if (light_subtype >= LST_RGB) {
+    *response += FPSTR(HUE_LIGHTS_STATUS_COLOR_JSON);
+    response->replace("{h}", String((uint16_t)(65535.0f * hue)));
+    response->replace("{s}", String(FactorToAlexa(sat)));
+    response->replace("{t}", String(ct));
+    response->replace("{m}", g_gotct?"ct":"hs");
+ }
+
+  /* TODO: separate color temperature from color support?
+  if ((LST_COLDWARM == light_subtype) || (LST_RGBWC == light_subtype)) {
+    response->replace("{t}", String(ct));
+    response->replace("{m}", g_gotct?"ct":"hs");
+  }
+  */
+
+  *response += FPSTR(HUE_LIGHTS_CLOSE_PARENTHESES_JSON);
 }
 
 void HueLightStatus2(byte device, String *response)
@@ -609,7 +646,7 @@ void HueGlobalConfig(String *path)
   }
   response += F("},\"groups\":{},\"schedules\":{},\"config\":");
   HueConfigResponse(&response);
-  response += "}";
+  response += FPSTR(HUE_LIGHTS_CLOSE_PARENTHESES_JSON);
   WebServer->send(200, FPSTR(HDR_CTYPE_JSON), response);
 }
 
@@ -650,7 +687,7 @@ void HueLights(String *path)
         response += ",\"";
       }
     }
-    response += "}";
+    response += FPSTR(HUE_LIGHTS_CLOSE_PARENTHESES_JSON);
     WebServer->send(200, FPSTR(HDR_CTYPE_JSON), response);
   }
   else if (path->endsWith("/state")) {               // Got ID/state
@@ -665,8 +702,27 @@ void HueLights(String *path)
 
       StaticJsonBuffer<400> jsonBuffer;
       JsonObject &hue_json = jsonBuffer.parseObject(WebServer->arg(0));
-      if (hue_json.containsKey("on")) {
 
+    
+      if (light_type) {
+        LightGetHsb(&hue, &sat, &bri, g_gotct);
+      }
+
+      if (hue_json.containsKey("bri")) {
+        tmp = hue_json["bri"];
+        bri = AlexaToFactor(tmp);
+        on = (tmp >= 2);
+        if (resp) {
+          response += ",";
+        }
+        response += FPSTR(HUE_LIGHT_RESPONSE_JSON);
+        response.replace("{id", String(device));
+        response.replace("{cm", "bri");
+        response.replace("{re", String(tmp));
+        resp = true;
+        change = true;
+      }
+      if (hue_json.containsKey("on")) {
         response += FPSTR(HUE_LIGHT_RESPONSE_JSON);
         response.replace("{id", String(device));
         response.replace("{cm", "on");
@@ -686,25 +742,6 @@ void HueLights(String *path)
         resp = true;
       }
 
-      if (light_type) {
-        LightGetHsb(&hue, &sat, &bri, g_gotct);
-      }
-
-      if (hue_json.containsKey("bri")) {             // Brightness is a scale from 1 (the minimum the light is capable of) to 254 (the maximum). Note: a brightness of 1 is not off.
-        tmp = hue_json["bri"];
-        tmp = max(tmp, 1);
-        tmp = min(tmp, 254);
-        bri = (float)tmp / 254.0f;
-        if (resp) {
-          response += ",";
-        }
-        response += FPSTR(HUE_LIGHT_RESPONSE_JSON);
-        response.replace("{id", String(device));
-        response.replace("{cm", "bri");
-        response.replace("{re", String(tmp));
-        resp = true;
-        change = true;
-      }
       if (hue_json.containsKey("hue")) {             // The hue value is a wrapping value between 0 and 65535. Both 0 and 65535 are red, 25500 is green and 46920 is blue.
         tmp = hue_json["hue"];
         hue = (float)tmp / 65535.0f;
@@ -721,9 +758,7 @@ void HueLights(String *path)
       }
       if (hue_json.containsKey("sat")) {             // Saturation of the light. 254 is the most saturated (colored) and 0 is the least saturated (white).
         tmp = hue_json["sat"];
-        tmp = max(tmp, 0);
-        tmp = min(tmp, 254);
-        sat = (float)tmp / 254.0f;
+        sat = AlexaToFactor(tmp);
         if (resp) {
           response += ",";
         }
@@ -778,6 +813,9 @@ void HueLights(String *path)
   else {
     WebServer->send(406, FPSTR(HDR_CTYPE_JSON), "{}");
   }
+
+  snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_HTTP D_HUE_API " (%s)"), response.c_str());
+  AddLog(LOG_LEVEL_DEBUG_MORE);
 }
 
 void HueGroups(String *path)
@@ -796,7 +834,7 @@ void HueGroups(String *path)
     }
     response.replace("{l1", lights);
     HueLightStatus1(1, &response);
-    response += F("}");
+    response += FPSTR(HUE_LIGHTS_CLOSE_PARENTHESES_JSON);
   }
 
   WebServer->send(200, FPSTR(HDR_CTYPE_JSON), response);
@@ -814,6 +852,9 @@ void HandleHueApi(String *path)
   uint8_t args = 0;
 
   path->remove(0, 4);                                // remove /api
+  if(path->endsWith("/")) {                          // remove trailing "/"
+    path->remove(path->length() - 1, 1);
+  }
   uint16_t apilen = path->length();
   snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_HTTP D_HUE_API " (%s)"), path->c_str());
   AddLog(LOG_LEVEL_DEBUG_MORE);                      // HTP: Hue API (//lights/1/state)
