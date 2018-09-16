@@ -953,8 +953,7 @@ void LightGetHsb(float *hue, float *sat, float *bri, bool gotct)
   } else {
     *hue = 0;
     *sat = 0;
-    //*bri = ((float)(Settings.light_dimmer) + 0.5f) / 100.0f; // TODO: do we need to round up here?
-    *bri = ((float)(Settings.light_dimmer)) / 100.0f;
+    *bri = ((float)(Settings.light_dimmer) + 0.397f) / 100.0f; // the value 0.397 has been determined by excessive tests
     // TODO: remove log
     snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_HTTP D_HUE_API " BLightGetHsb(bri=%d)"), (int16_t)(*bri*10000.0f));
     AddLog(LOG_LEVEL_DEBUG_MORE);
@@ -962,7 +961,7 @@ void LightGetHsb(float *hue, float *sat, float *bri, bool gotct)
 }
 
 uint8_t LightFactorToPercent(float factor) {
-  uint8_t tmp = (uint8_t)(factor * 100.0f + 0.5f);
+  uint8_t tmp = (uint8_t)(factor * 100.0f + 0.2f);
   if(tmp > 100)
     tmp = 100;
   return tmp;
