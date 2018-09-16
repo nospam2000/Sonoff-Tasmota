@@ -711,10 +711,7 @@ void HueLights(String *path)
       if (hue_json.containsKey("bri")) {
         tmp = hue_json["bri"];
         bri = AlexaToFactor(tmp);
-        on = (tmp >= 2);
-        if (resp) {
-          response += ",";
-        }
+        on = (tmp >= 2); // when setting the brightness >0, set the on state to 'true'
         response += FPSTR(HUE_LIGHT_RESPONSE_JSON);
         response.replace("{id", String(device));
         response.replace("{cm", "bri");
@@ -723,6 +720,9 @@ void HueLights(String *path)
         change = true;
       }
       if (hue_json.containsKey("on")) {
+        if (resp) {
+          response += ",";
+        }
         response += FPSTR(HUE_LIGHT_RESPONSE_JSON);
         response.replace("{id", String(device));
         response.replace("{cm", "on");

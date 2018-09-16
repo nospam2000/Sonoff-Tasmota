@@ -462,10 +462,12 @@ uint16_t LightGetColorTemp()
 void LightSetDimmer(uint8_t myDimmer)
 {
   float temp;
+  if(myDimmer == 0) // avoid division by zero
+    myDimmer = 1;
+  float dimmer = 100.0f / (float)myDimmer;
 
   if (PHILIPS == Settings.module) {
     // Xiaomi Philips bulbs use two PWM channels with a different scheme:
-    float dimmer = 100 / (float)myDimmer;
     temp = (float)Settings.light_color[0] / dimmer; // channel 1 is intensity
     light_current_color[0] = (uint8_t)temp;
     temp = (float)Settings.light_color[1];          // channel 2 is temperature
@@ -475,7 +477,6 @@ void LightSetDimmer(uint8_t myDimmer)
   if (LT_PWM1 == light_type) {
     Settings.light_color[0] = 255;    // One PWM channel only supports Dimmer but needs max color
   }
-  float dimmer = 100 / (float)myDimmer;
   for (byte i = 0; i < light_subtype; i++) {
     if (Settings.flag.light_signal) {
       temp = (float)light_signal_color[i] / dimmer;
@@ -495,9 +496,10 @@ void LightSetColor()
       highest = light_current_color[i];
     }
   }
-  float mDim = (float)highest / 2.55;
+  float mDim = (float)highest / 2.55f;
+  //Settings.light_dimmer = (uint8_t)(mDim + 0.5f); // TODO: do we need to round up here?
   Settings.light_dimmer = (uint8_t)mDim;
-  float dimmer = 100 / mDim;
+  float dimmer = 100.0f / mDim;
   for (byte i = 0; i < light_subtype; i++) {
     float temp = (float)light_current_color[i] * dimmer;
     Settings.light_color[i] = (uint8_t)temp;
@@ -832,14 +834,21 @@ float light_hue = 0.0;
 float light_saturation = 0.0;
 float light_brightness = 0.0;
 
+float LightUint8ToFactor(uint8_t v) {
+  float fact = ((float)v + 0.5f) / 255.0f;
+  if(fact > 1.0f)
+    fact = 1.0f;
+  return fact;
+}
+
 void LightRgbToHsb()
 {
   LightSetDimmer(Settings.light_dimmer);
 
   // convert colors to float between (0.0 - 1.0)
-  float r = light_current_color[0] / 255.0f;
-  float g = light_current_color[1] / 255.0f;
-  float b = light_current_color[2] / 255.0f;
+  float r = LightUint8ToFactor(light_current_color[0]);
+  float g = LightUint8ToFactor(light_current_color[1]);
+  float b = LightUint8ToFactor(light_current_color[2]);
 
   float max = (r > g && r > b) ? r : (g > b) ? g : b;
   float min = (r < g && r < b) ? r : (g < b) ? g : b;
@@ -938,19 +947,32 @@ void LightGetHsb(float *hue, float *sat, float *bri, bool gotct)
     *hue = light_hue;
     *sat = light_saturation;
     *bri = light_brightness;
+    // TODO: remove log
+    snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_HTTP D_HUE_API " ALightGetHsb(bri=%d)"), (int16_t)(*bri*10000.0f));
+    AddLog(LOG_LEVEL_DEBUG_MORE);
   } else {
     *hue = 0;
     *sat = 0;
-    *bri = (0.01f * (float)Settings.light_dimmer);
+    //*bri = ((float)(Settings.light_dimmer) + 0.5f) / 100.0f; // TODO: do we need to round up here?
+    *bri = ((float)(Settings.light_dimmer)) / 100.0f;
+    // TODO: remove log
+    snprintf_P(log_data, sizeof(log_data), PSTR(D_LOG_HTTP D_HUE_API " BLightGetHsb(bri=%d)"), (int16_t)(*bri*10000.0f));
+    AddLog(LOG_LEVEL_DEBUG_MORE);
   }
+}
+
+uint8_t LightFactorToPercent(float factor) {
+  uint8_t tmp = (uint8_t)(factor * 100.0f + 0.5f);
+  if(tmp > 100)
+    tmp = 100;
+  return tmp;
 }
 
 void LightSetHsb(float hue, float sat, float bri, uint16_t ct, bool gotct)
 {
   if (light_subtype > LST_COLDWARM) {
     if ((LST_RGBWC == light_subtype) && (gotct)) {
-      uint8_t tmp = (uint8_t)(bri * 100);
-      Settings.light_dimmer = tmp;
+      Settings.light_dimmer = LightFactorToPercent(bri);
       if (ct > 0) {
         LightSetColorTemp(ct);
       }
@@ -964,8 +986,7 @@ void LightSetHsb(float hue, float sat, float bri, uint16_t ct, bool gotct)
     LightPreparePower();
     MqttPublishPrefixTopic_P(RESULT_OR_STAT, PSTR(D_CMND_COLOR));
   } else {
-    uint8_t tmp = (uint8_t)(bri * 100);
-    Settings.light_dimmer = tmp;
+    Settings.light_dimmer = LightFactorToPercent(bri);
     if (LST_COLDWARM == light_subtype) {
       if (ct > 0) {
         LightSetColorTemp(ct);
