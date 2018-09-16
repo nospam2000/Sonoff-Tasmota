@@ -4,7 +4,7 @@
 //  3. integer percentage
 
 // compile with
-//  g++ -o TestColorPluginValueMappings TestColorPluginValueMappings.cpp
+//  g++ -O0 -o TestColorPluginValueMappings TestColorPluginValueMappings.cpp
 #include <stdio.h>
 #include <stdint.h>
 
@@ -286,25 +286,6 @@ void LightPreparePower()
   LightState(0);
 }
 
-void LightSetColor()
-{
-  uint8_t highest = 0;
-
-  for (byte i = 0; i < light_subtype; i++) {
-    if (highest < light_current_color[i]) {
-      highest = light_current_color[i];
-    }
-  }
-  float mDim = (float)highest / 2.55f;
-  //Settings.light_dimmer = (uint8_t)(mDim + 0.5f); // TODO: do we need to round up here?
-  Settings.light_dimmer = (uint8_t)mDim;
-  float dimmer = 100.0f / mDim;
-  for (byte i = 0; i < light_subtype; i++) {
-    float temp = (float)light_current_color[i] * dimmer;
-    Settings.light_color[i] = (uint8_t)temp;
-  }
-}
-
 void LightSetColorTemp(uint16_t ct)
 {
 /* Color Temperature (https://developers.meethue.com/documentation/core-concepts)
@@ -362,6 +343,26 @@ void LightSetDimmer(uint8_t myDimmer)
     light_current_color[i] = (uint8_t)temp;
   }
 }
+
+void LightSetColor()
+{
+  uint8_t highest = 0;
+
+  for (byte i = 0; i < light_subtype; i++) {
+    if (highest < light_current_color[i]) {
+      highest = light_current_color[i];
+    }
+  }
+  float mDim = (float)highest / 2.55f;
+  //Settings.light_dimmer = (uint8_t)(mDim + 0.5f); // TODO: do we need to round up here?
+  Settings.light_dimmer = (uint8_t)mDim;
+  float dimmer = 100.0f / mDim;
+  for (byte i = 0; i < light_subtype; i++) {
+    float temp = (float)light_current_color[i] * dimmer;
+    Settings.light_color[i] = (uint8_t)temp;
+  }
+}
+
 
 float LightUint8ToFactor(uint8_t v) {
   float fact = ((float)v + 0.5f) / 255.0f;
@@ -529,7 +530,7 @@ void LightSetHsb(float hue, float sat, float bri, uint16_t ct, bool gotct)
 
 //******************************
 
-bool testHsb(uint8_t percent, float hue, float sat, float bri, uint16_t ct, bool gotct) {
+bool testHsb1(uint8_t percent, float hue, float sat, float bri, uint16_t ct, bool gotct) {
   LightSetHsb(hue, sat, bri, ct, gotct);
 
   float hue2, sat2, bri2;
@@ -545,24 +546,64 @@ bool testHsb(uint8_t percent, float hue, float sat, float bri, uint16_t ct, bool
     return true;
 }
 
-int main() {
-    int errorCount = 0;
+bool testHsb2(uint8_t percent, float hue, float sat, float bri, uint16_t ct, bool gotct) {
+  LightSetHsb(hue, sat, bri, ct, gotct);
 
+  float hue2, sat2, bri2;
+  LightGetHsb(&hue2, &sat2, &bri2, gotct);
+
+    uint8_t bri1int = FactorToAlexa(bri);
+    //uint8_t bri2int = FactorToAlexa(bri2 * 1.003f + 0.0040f);
+    //uint8_t bri2int = FactorToAlexa(bri2 * 1.0023f + 0.0040f);
+    //uint8_t bri2int = FactorToAlexa(bri2 * 1.0023f + 0.0040f);
+    uint8_t bri2int = FactorToAlexa(bri2 * 1.0023f + 0.00399f);
+
+    if(bri1int != bri2int) {
+          printf("Value mismatch: percent=%d, in=%d, out=%d, diff=%.6f\n", percent, bri1int, bri2int, (bri2 - bri)*100.0f);
+      return false;
+    }
+    return true;
+}
+
+int main() {
+  int errorCount = 0;
+
+  {
     // only one PWM channel, no color, no ct
     light_type = LT_PWM1;
+    light_subtype = LST_SINGLE;
     Settings.module = SONOFF_BN;
     bool gotct = false;
     float hue = 0.5, sat = 0.5, bri = 0.5;
     uint16_t ct = 500;
-	errorCount = 0;
-	printf("Test4 START\n");
-	for(int i = 0; i < (sizeof(testData) / sizeof(testData[0])); i++) {
-		int v1 = testData[i].percent;
-		bri = AlexaToFactor(testData[i].alexa);
-        if(!testHsb(v1, hue, sat, bri, ct, gotct))
-            errorCount++;
-	}
+    errorCount = 0;
+    printf("Test1 START\n");
+    for(int i = 0; i < (sizeof(testData) / sizeof(testData[0])); i++) {
+      int v1 = testData[i].percent;
+      bri = AlexaToFactor(testData[i].alexa);
+      if(!testHsb1(v1, hue, sat, bri, ct, gotct))
+        errorCount++;
+      }
+    printf("Test1 %s, errorcount=%d\n\n", errorCount > 0 ? "FAILED" : "SUCCEEDED", errorCount);
+  }
 
-	printf("Test4 %s, errorcount=%d\n", errorCount > 0 ? "FAILED" : "SUCCEEDED", errorCount);
-
+  {
+    // full color with ct
+    light_type = LT_RGBWC;
+    light_subtype = LST_RGBWC;
+    Settings.module = AILIGHT;
+    bool gotct = false;
+    //float hue = 0.5, sat = 0.5, bri = 0.5;
+    float hue = 0.0f, sat = 1.0f, bri = 0.0f;
+    uint16_t ct = 500;
+    errorCount = 0;
+    printf("Test2 START\n");
+    for(int i = 0; i < (sizeof(testData) / sizeof(testData[0])); i++) {
+      int v1 = testData[i].percent;
+      bri = AlexaToFactor(testData[i].alexa);
+      if(!testHsb2(v1, hue, sat, bri, ct, gotct))
+        errorCount++;
+    }
+    printf("Test2 %s, errorcount=%d\n\n", errorCount > 0 ? "FAILED" : "SUCCEEDED", errorCount);
+  }
 }
